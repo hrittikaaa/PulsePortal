@@ -10,6 +10,8 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AiController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Controllers\PrescriptionController;
+use App\Http\Controllers\RoomAdmissionController;
+use App\Http\Controllers\AdmissionPortalController;
 
 // ── Auth routes ───────────────────────────────────────────────
 Route::prefix('auth')->group(function () {
@@ -38,6 +40,7 @@ Route::middleware('auth:api')->group(function () {
     Route::prefix('patient')->group(function () {
         Route::get('appointments/booked-slots', [AppointmentController::class, 'getBookedSlots']);
         Route::get('appointments',               [AppointmentController::class, 'patientIndex']);
+        Route::get('room-admissions',            [AdmissionPortalController::class, 'patientAdmissions']);
         Route::post('appointments',              [AppointmentController::class, 'store']);
         Route::patch('appointments/{id}/cancel', [AppointmentController::class, 'cancel']);
         
@@ -53,6 +56,7 @@ Route::middleware('auth:api')->group(function () {
     // Doctor routes
     Route::prefix('doctor')->group(function () {
         Route::get('appointments',                        [AppointmentController::class, 'doctorIndex']);
+        Route::get('room-admissions',                     [AdmissionPortalController::class, 'doctorAdmissions']);
         Route::patch('appointments/{id}/status',          [AppointmentController::class, 'updateStatus']);
         Route::post('appointments/{id}/prescription',     [PrescriptionController::class, 'store']);
         Route::get('available',                           [DoctorController::class, 'index']);
@@ -76,6 +80,19 @@ Route::middleware('auth:api')->group(function () {
         Route::get('patients',                 [AdminController::class, 'getPatients']);
         Route::get('stats',                    [AdminController::class, 'getStats']);
         Route::get('me',                       [AdminController::class, 'me']);
+
+        // Room admissions (read access for any admin)
+        Route::get('room-admissions',                      [RoomAdmissionController::class, 'index']);
+        Route::get('room-admissions/rooms',                [RoomAdmissionController::class, 'rooms']);
+        Route::get('room-admissions/departments',          [RoomAdmissionController::class, 'departments']);
+
+        // Room admission management (Front Desk Admin + Super Admin)
+        Route::middleware('admin.admission.manage')->group(function () {
+            Route::post('room-admissions',                 [RoomAdmissionController::class, 'store']);
+            Route::patch('room-admissions/{id}/status',    [RoomAdmissionController::class, 'updateStatus']);
+            Route::post('room-admissions/{id}/transfer',   [RoomAdmissionController::class, 'transfer']);
+            Route::post('room-admissions/{id}/notes',      [RoomAdmissionController::class, 'addNote']);
+        });
 
         // Department-admin appointment management
         Route::get('department-appointments',            [AdminController::class, 'getDepartmentAppointments']);

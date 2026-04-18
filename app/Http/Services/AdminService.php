@@ -5,13 +5,15 @@ namespace App\Http\Services;
 use App\Models\User;
 use App\Models\Doctor;
 use App\Models\Admin;
+use App\Models\Patient;
+use App\Models\Appointment;
 use App\Mail\WelcomeDoctorMail;
 use App\Mail\AdminWelcomMail;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
-
-use Mail;
+use Illuminate\Validation\ValidationException;
 
 class AdminService
 {
@@ -28,6 +30,8 @@ class AdminService
             'consultation_fee' => 'nullable|numeric|min:0',
             'availability_days' => 'nullable|array',
             'availability_days.*' => 'string|in:SUN,MON,TUE,WED,THU,FRI,SAT',
+            'service_start_time' => 'nullable|date_format:H:i',
+            'service_end_time' => 'nullable|date_format:H:i|after:service_start_time',
         ], [
             'email.regex' => 'Only gmail.com, yahoo.com, outlook.com, aust.edu, and pulseportal.com emails are allowed.',
             'password.regex' => 'Password must contain at least one uppercase letter, one lowercase letter, and one number.',
@@ -35,18 +39,28 @@ class AdminService
         ])->validate();
 
         return DB::transaction(function () use ($validatedData, $data) {
+            $availabilityDays = $validatedData['availability_days'] ?? [];
+            $serviceStartTime = $validatedData['service_start_time'] ?? '09:00';
+            $serviceEndTime = $validatedData['service_end_time'] ?? '17:00';
+
+            if ($availabilityDays !== [] && $serviceStartTime >= $serviceEndTime) {
+                throw ValidationException::withMessages([
+                    'service_end_time' => 'Service end time must be after service start time.',
+                ]);
+            }
+
+            $availability = $this->buildAvailabilitySchedule(
+                $availabilityDays,
+                $serviceStartTime,
+                $serviceEndTime,
+            );
+
             $user = User::create([
                 'name' => $validatedData['name'],
                 'email' => $validatedData['email'],
                 'password' => Hash::make($validatedData['password']),
                 'role' => 'doctor',
             ]);
-
-            // Parse availability days into JSON
-            $availability = null;
-            if (!empty($validatedData['availability_days'])) {
-                $availability = ['days' => $validatedData['availability_days']];
-            }
 
             Doctor::create([
                 'user_id'          => $user->id,
@@ -86,6 +100,11 @@ class AdminService
         ])->validate();
 
         return DB::transaction(function () use ($validatedData, $data) {
+            $department = $data['department'] ?? null;
+            if (is_string($department) && trim($department) === '') {
+                $department = null;
+            }
+
             $user = User::create([
                 'name' => $validatedData['name'],
                 'email' => $validatedData['email'],
@@ -96,10 +115,10 @@ class AdminService
             Admin::create([
                 'user_id' => $user->id,
                 'admin_role' => $data['admin_role'],
-                'department' => $data['department'],
+                'department' => $department,
             ]);
 
-            Mail::to($data['email'])->queue(new AdminWelcomMail($data['name'], $data['email'], $data['admin_role'], $data['department'], $data['password']));
+            Mail::to($data['email'])->queue(new AdminWelcomMail($data['name'], $data['email'], $data['admin_role'], $department ?? 'Not Assigned', $data['password']));
 
             return [
                 'id' => $user->id,
@@ -126,8 +145,97 @@ class AdminService
                 'fee'            => $d->consultation_fee,
                 'is_available'   => $d->is_available,
                 'availability'   => $d->availability,
+                'service_hours'  => $this->extractServiceHours($d->availability),
+                'service_hours_label' => $this->formatServiceHoursLabel($d->availability),
             ])
             ->toArray();
+    }
+
+    private function buildAvailabilitySchedule(array $availabilityDays, string $startTime, string $endTime): ?array
+    {
+        if ($availabilityDays === []) {
+            return null;
+        }
+
+        $dayMap = [
+            'SUN' => 'sun',
+            'MON' => 'mon',
+            'TUE' => 'tue',
+            'WED' => 'wed',
+            'THU' => 'thu',
+            'FRI' => 'fri',
+            'SAT' => 'sat',
+        ];
+
+        $availability = [
+            'days' => array_values($availabilityDays),
+            'service_hours' => [
+                'start' => $startTime,
+                'end' => $endTime,
+            ],
+        ];
+
+        foreach ($availabilityDays as $dayCode) {
+            $normalizedDayCode = strtoupper((string) $dayCode);
+            $dayKey = $dayMap[$normalizedDayCode] ?? null;
+            if (!$dayKey) {
+                continue;
+            }
+
+            $availability[$dayKey] = [$startTime, $endTime];
+        }
+
+        return $availability;
+    }
+
+    private function extractServiceHours(?array $availability): ?array
+    {
+        if (!is_array($availability)) {
+            return null;
+        }
+
+        $serviceHours = $availability['service_hours'] ?? null;
+        if (
+            is_array($serviceHours) &&
+            !empty($serviceHours['start']) &&
+            !empty($serviceHours['end'])
+        ) {
+            return [
+                'start' => (string) $serviceHours['start'],
+                'end' => (string) $serviceHours['end'],
+            ];
+        }
+
+        $dayKeys = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+        $ranges = collect($dayKeys)
+            ->map(fn ($day) => $availability[$day] ?? null)
+            ->filter(fn ($range) => is_array($range) && count($range) === 2)
+            ->values();
+
+        if ($ranges->isEmpty()) {
+            return null;
+        }
+
+        $starts = $ranges->map(fn ($range) => (string) $range[0])->sort()->values();
+        $ends = $ranges->map(fn ($range) => (string) $range[1])->sort()->values();
+
+        return [
+            'start' => $starts->first(),
+            'end' => $ends->last(),
+        ];
+    }
+
+    private function formatServiceHoursLabel(?array $availability): ?string
+    {
+        $serviceHours = $this->extractServiceHours($availability);
+        if (!$serviceHours) {
+            return null;
+        }
+
+        $start = date('h:i A', strtotime($serviceHours['start']));
+        $end = date('h:i A', strtotime($serviceHours['end']));
+
+        return "{$start} - {$end}";
     }
 
     // Get all patients
@@ -137,9 +245,13 @@ class AdminService
             ->get()
             ->map(fn($p) => [
                 'id' => $p->id,
+                'patient_id' => 'PT-' . str_pad((string) $p->id, 5, '0', STR_PAD_LEFT),
                 'user_id' => $p->user_id,
                 'name' => $p->user->name,
                 'email' => $p->user->email,
+                'phone' => $p->phone,
+                'emergency_contact' => $p->emergency_contact,
+                'emergency_phone' => $p->emergency_phone,
             ])
             ->toArray();
     }

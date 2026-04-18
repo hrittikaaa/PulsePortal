@@ -14,11 +14,16 @@ import {
     Phone,
     AlertTriangle,
     Sparkles,
+    BedDouble,
+    Building2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import appointmentService from "../../api/appointmentService";
 import authService from "../../api/authService";
 import api from "../../api/axios";
+import roomAdmissionService from "../../api/roomAdmissionService";
+
+const Motion = motion;
 
 const cardVariant = {
     hidden: { opacity: 0, y: 30 },
@@ -27,6 +32,14 @@ const cardVariant = {
         y: 0,
         transition: { delay: i * 0.1, duration: 0.4, ease: "easeOut" },
     }),
+};
+
+const ADMISSION_STATUS_STYLES = {
+    pending: "bg-amber-50 text-amber-700 border border-amber-100",
+    admitted: "bg-emerald-50 text-emerald-700 border border-emerald-100",
+    transfer: "bg-sky-50 text-sky-700 border border-sky-100",
+    discharged: "bg-slate-100 text-slate-600 border border-slate-200",
+    cancelled: "bg-rose-50 text-rose-600 border border-rose-100",
 };
 
 // Greeting based on time of day
@@ -44,9 +57,47 @@ function formatTime(t) {
     return `${hour > 12 ? hour - 12 : hour || 12}:${m} ${hour >= 12 ? "PM" : "AM"}`;
 }
 
+function formatDate(value) {
+    if (!value) return "—";
+
+    const date = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return "—";
+
+    return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+    });
+}
+
+function appointmentDateTime(appointment) {
+    const datePart = String(appointment?.appointment_date || "").slice(0, 10);
+    const timePart = appointment?.appointment_time || "00:00:00";
+
+    const parsed = new Date(`${datePart}T${timePart}`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateTime(value) {
+    if (!value) return "—";
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+
+    return date.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+    });
+}
+
 export default function DoctorDashboard() {
     const [appointments, setAppointments] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [admissions, setAdmissions] = useState([]);
+    const [admissionsLoading, setAdmissionsLoading] = useState(true);
     const navigate = useNavigate();
 
     const user = authService.getCurrentUser();
@@ -59,6 +110,14 @@ export default function DoctorDashboard() {
             .finally(() => setLoading(false));
     }, []);
 
+    useEffect(() => {
+        roomAdmissionService
+            .getDoctorAdmissions()
+            .then(setAdmissions)
+            .catch(() => {})
+            .finally(() => setAdmissionsLoading(false));
+    }, []);
+
     // Fix: use local date not UTC
     const today = new Date();
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -66,9 +125,24 @@ export default function DoctorDashboard() {
     const todayAppts = appointments.filter(
         (a) => String(a.appointment_date).slice(0, 10) === todayStr,
     );
-    const upcomingCount = appointments.filter(
-        (a) => !["cancelled", "completed"].includes(a.status),
-    ).length;
+    const now = new Date();
+    const upcomingAppointments = [...appointments]
+        .filter((a) => !["cancelled", "completed"].includes(a.status))
+        .filter((a) => {
+            const dateTime = appointmentDateTime(a);
+            return dateTime && dateTime >= now;
+        })
+        .sort((a, b) => appointmentDateTime(a) - appointmentDateTime(b));
+    const upcomingCount = upcomingAppointments.length;
+    const nextUpcomingAppointment = upcomingAppointments[0] || null;
+    const upcomingPreview = upcomingAppointments.slice(0, 5);
+    const activeAdmissions = admissions.filter((admission) =>
+        ["pending", "admitted", "transfer"].includes(admission.status),
+    );
+    const admissionPreview =
+        activeAdmissions.length > 0
+            ? activeAdmissions.slice(0, 5)
+            : admissions.slice(0, 5);
 
     // Pagination for Today's Appointments
     const [currentPage, setCurrentPage] = useState(1);
@@ -157,7 +231,7 @@ export default function DoctorDashboard() {
                 {/* LEFT SIDE */}
                 <div className="lg:col-span-2 space-y-6">
                     {/* Stats Cards */}
-                    <div className="grid md:grid-cols-2 gap-6">
+                    <div className="grid md:grid-cols-3 gap-6">
                         {[
                             {
                                 title: "Appointments Today",
@@ -168,6 +242,11 @@ export default function DoctorDashboard() {
                                 title: "Upcoming",
                                 value: loading ? "—" : upcomingCount,
                                 icon: <Users size={22} />,
+                            },
+                            {
+                                title: "Active Inpatients",
+                                value: admissionsLoading ? "—" : activeAdmissions.length,
+                                icon: <BedDouble size={22} />,
                             },
                         ].map((item, i) => (
                             <motion.div
@@ -193,6 +272,86 @@ export default function DoctorDashboard() {
                             </motion.div>
                         ))}
                     </div>
+
+                    <motion.div
+                        initial={{ opacity: 0, y: 30 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.22 }}
+                        className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6"
+                    >
+                        <div className="flex items-center justify-between mb-6">
+                            <h2 className="text-lg font-semibold text-slate-800">
+                                Assigned Room Admissions
+                            </h2>
+                            {!admissionsLoading && (
+                                <span className="text-xs text-slate-500">
+                                    {admissions.length} total record
+                                    {admissions.length === 1 ? "" : "s"}
+                                </span>
+                            )}
+                        </div>
+
+                        {admissionsLoading ? (
+                            <div className="flex items-center justify-center py-8 text-slate-400 gap-2">
+                                <Loader2 size={16} className="animate-spin" />
+                                <span className="text-sm">Loading admissions...</span>
+                            </div>
+                        ) : admissionPreview.length === 0 ? (
+                            <div className="text-center py-8 text-sm text-slate-400">
+                                No room admission assigned to you yet.
+                            </div>
+                        ) : (
+                            <div className="space-y-3">
+                                {activeAdmissions.length === 0 && (
+                                    <p className="text-xs text-slate-500 px-1">
+                                        No active inpatient under your name. Showing recent records.
+                                    </p>
+                                )}
+
+                                {admissionPreview.map((admission) => {
+                                    const statusClass =
+                                        ADMISSION_STATUS_STYLES[admission.status] ||
+                                        ADMISSION_STATUS_STYLES.pending;
+
+                                    return (
+                                        <motion.div
+                                            key={admission.id}
+                                            whileHover={{ backgroundColor: "#f8fafc" }}
+                                            className="border border-slate-100 rounded-xl p-4"
+                                        >
+                                            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                                <p className="font-semibold text-slate-700 text-sm">
+                                                    {admission.patient_name}
+                                                </p>
+                                                <span
+                                                    className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold tracking-wide capitalize ${statusClass}`}
+                                                >
+                                                    {admission.status}
+                                                </span>
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-2 mb-2">
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
+                                                    <Building2 size={12} className="text-[#127fec]" />
+                                                    {admission.room_number || "Room pending"} · Bed {admission.bed_label || "—"}
+                                                </span>
+                                                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-medium">
+                                                    {admission.admission_no}
+                                                </span>
+                                            </div>
+
+                                            <p className="text-xs text-slate-500">
+                                                {admission.department || "General"} · {admission.admission_type || "General"} · {admission.priority || "Normal"}
+                                            </p>
+                                            <p className="text-xs text-slate-400 mt-1">
+                                                Updated {formatDateTime(admission.updated_at)}
+                                            </p>
+                                        </motion.div>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </motion.div>
 
                     {/* Schedule Table */}
                     <motion.div
@@ -230,8 +389,60 @@ export default function DoctorDashboard() {
                                     </span>
                                 </div>
                             ) : todayAppts.length === 0 ? (
-                                <div className="text-center py-8 text-sm text-slate-400">
-                                    No appointments today.
+                                <div className="py-8 space-y-4">
+                                    <div className="text-center text-sm text-slate-400 space-y-2">
+                                        <p>No appointments today.</p>
+                                        {nextUpcomingAppointment && (
+                                            <p className="text-xs text-slate-500">
+                                                Next booking: {nextUpcomingAppointment.patient_name} on {formatDate(nextUpcomingAppointment.appointment_date)} at {formatTime(nextUpcomingAppointment.appointment_time)}.
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {upcomingPreview.length > 0 && (
+                                        <div className="max-w-2xl mx-auto rounded-xl border border-slate-100 bg-slate-50/60 p-4">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                                                    Upcoming Appointments
+                                                </p>
+                                                <button
+                                                    onClick={() => navigate("/doctor/appointments")}
+                                                    className="text-xs font-semibold text-[#127fec] hover:underline"
+                                                >
+                                                    View all
+                                                </button>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                {upcomingPreview.map((item) => (
+                                                    <div
+                                                        key={item.id}
+                                                        className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white border border-slate-100"
+                                                    >
+                                                        <div className="min-w-0">
+                                                            <p className="text-sm font-semibold text-slate-700 truncate">
+                                                                {item.patient_name}
+                                                            </p>
+                                                            <p className="text-xs text-slate-500 truncate">
+                                                                {formatDate(item.appointment_date)} at {formatTime(item.appointment_time)} · {item.type === "in_person" ? "In-Person" : "Online"}
+                                                            </p>
+                                                        </div>
+                                                        <span
+                                                            className={`px-2.5 py-1 rounded-full text-[11px] font-medium capitalize whitespace-nowrap ${
+                                                                item.status === "confirmed"
+                                                                    ? "bg-blue-100 text-blue-600"
+                                                                    : item.status === "in_progress"
+                                                                      ? "bg-violet-100 text-violet-600"
+                                                                      : "bg-yellow-100 text-yellow-700"
+                                                            }`}
+                                                        >
+                                                            {item.status === "in_progress" ? "In Progress" : item.status}
+                                                        </span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             ) : (
                                 paginatedData.map((item) => (
