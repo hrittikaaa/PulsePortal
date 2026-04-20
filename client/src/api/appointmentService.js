@@ -37,6 +37,14 @@ const appointmentService = {
         return response.data.data;
     },
 
+    // Doctor searches medicine suggestions while typing prescription
+    getMedicineSuggestions: async (query) => {
+        const response = await api.get("/doctor/medicines/suggestions", {
+            params: { q: query },
+        });
+        return response.data.data || [];
+    },
+
     // Doctor updates appointment status
     updateAppointmentStatus: async (id, status) => {
         const response = await api.patch(`/doctor/appointments/${id}/status`, {
@@ -51,10 +59,26 @@ const appointmentService = {
         return response.data;
     },
 
+    // Doctor retrieves printable prescription PDF for an appointment
+    getDoctorPrescriptionPdf: async (appointmentId) => {
+        const response = await api.get(`/doctor/appointments/${appointmentId}/prescription/pdf`, {
+            responseType: "blob",
+        });
+        return response.data;
+    },
+
     // Patient retrieves their prescription for a completed appointment
     getPatientPrescription: async (appointmentId) => {
         const response = await api.get(`/patient/appointments/${appointmentId}/prescription`);
         return response.data.data;
+    },
+
+    // Patient downloads prescription PDF for an appointment
+    getPatientPrescriptionPdf: async (appointmentId) => {
+        const response = await api.get(`/patient/appointments/${appointmentId}/prescription/pdf`, {
+            responseType: "blob",
+        });
+        return response.data;
     },
 };
 
